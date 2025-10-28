@@ -34,12 +34,19 @@ class FlickVideoApp extends StatelessWidget {
 class VideoConstants {
   static const double visibilityThreshold = 0.6;
   static const double aspectRatio = 9 / 16;
-  static const int preloadCount = 3;
+  static const int preloadCount = 5; // Preload more videos for small files
   static const Duration debounceDelay = Duration(milliseconds: 100);
-  static const Duration bufferMinMs = Duration(milliseconds: 2000);
-  static const Duration bufferMaxMs = Duration(milliseconds: 600000);
-  static const Duration bufferForPlaybackMs = Duration(milliseconds: 3000);
-  static const Duration bufferForPlaybackAfterRebufferMs = Duration(milliseconds: 5000);
+  static const Duration bufferMinMs = Duration(milliseconds: 1000); // 1 second
+  static const Duration bufferMaxMs = Duration(milliseconds: 10000); // 10 seconds
+  static const Duration bufferForPlaybackMs = Duration(milliseconds: 2000); // 2 seconds
+  static const Duration bufferForPlaybackAfterRebufferMs =
+      Duration(milliseconds: 3000); // 3 seconds
+  static const bool enableLooping = true; // Enable video looping
+  
+  // Cache configuration for small videos (700KB)
+  static const int preCacheSize = 2 * 1024 * 1024; // 2MB
+  static const int maxCacheSize = 10 * 1024 * 1024; // 10MB
+  static const int maxCacheFileSize = 2 * 1024 * 1024; // 2MB
 }
 
 /// Video data model
@@ -82,23 +89,27 @@ class VideoController extends GetxController {
   final RxList<VideoData> videos = <VideoData>[].obs;
   final RxInt currentIndex = 0.obs;
   final Rx<VideoState> currentVideoState = VideoState.loading.obs;
-  
+
   // Video controllers management
   final Map<int, BetterPlayerController> _videoControllers = {};
   final Map<int, VideoState> _videoStates = {};
   final Set<int> _playingVideos = {};
-  
+
   // Page controller
   late PreloadPageController pageController;
-  
+
   // Debounce timer for visibility changes
   Timer? _debounceTimer;
+  
+  // Loop control
+  final RxBool _isLoopEnabled = VideoConstants.enableLooping.obs;
 
   @override
   void onInit() {
     super.onInit();
     _initializeVideos();
     _initializePageController();
+    optimizeForSmallVideos();
   }
 
   @override
@@ -124,7 +135,7 @@ class VideoController extends GetxController {
       "https://down-aka-vn.vod.susercontent.com/api/v4/11110124/mms/vn-11110124-6ke14-lvlswekeddela9.16004091716382549.mp4",
       "https://down-aka-vn.vod.susercontent.com/api/v4/11110124/mms/vn-11110124-6ke14-lwfs65cxgijd0b.16004091718202545.mp4",
     ];
-    
+
     videos.value = videoUrls
         .asMap()
         .entries
@@ -224,6 +235,29 @@ class VideoController extends GetxController {
     }
     return null;
   }
+  
+  /// Toggle video looping
+  void toggleLoop() {
+    _isLoopEnabled.value = !_isLoopEnabled.value;
+    debugPrint('🔄 Loop ${_isLoopEnabled.value ? "enabled" : "disabled"}');
+
+    // Update all existing video controllers
+    for (final controller in _videoControllers.values) {
+      controller.setLooping(_isLoopEnabled.value);
+    }
+  }
+
+  /// Get loop status
+  bool get isLoopEnabled => _isLoopEnabled.value;
+  
+  /// Optimize cache for small videos (700KB)
+  void optimizeForSmallVideos() {
+    debugPrint('📦 Optimizing cache for small videos (700KB)');
+    debugPrint('📊 PreCache Size: ${VideoConstants.preCacheSize ~/ 1024}KB');
+    debugPrint('📊 Max Cache Size: ${VideoConstants.maxCacheSize ~/ 1024}KB');
+    debugPrint('📊 Max File Size: ${VideoConstants.maxCacheFileSize ~/ 1024}KB');
+    debugPrint('📊 Preload Count: ${VideoConstants.preloadCount} videos');
+  }
 
   /// Dispose all controllers
   void _disposeAllControllers() {
@@ -253,68 +287,28 @@ class VideoPlayerScreen extends GetView<VideoController> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: _buildVideoList(),
-      floatingActionButton: _buildDebugButton(),
     );
   }
 
   /// Build video list
   Widget _buildVideoList() {
     return Obx(() => PreloadPageView.builder(
-      controller: controller.pageController,
-      itemCount: controller.videos.length,
-      scrollDirection: Axis.vertical,
-      onPageChanged: controller.onPageChanged,
-      preloadPagesCount: VideoConstants.preloadCount,
-      itemBuilder: (context, index) {
-        final video = controller.videos[index];
-        return VideoItem(
-          key: ValueKey(video.id),
-          video: video,
-          index: index,
-        );
-      },
-    ));
+          controller: controller.pageController,
+          itemCount: controller.videos.length,
+          scrollDirection: Axis.vertical,
+          onPageChanged: controller.onPageChanged,
+          preloadPagesCount: VideoConstants.preloadCount,
+          itemBuilder: (context, index) {
+            final video = controller.videos[index];
+            return VideoItem(
+              key: ValueKey(video.id),
+              video: video,
+              index: index,
+            );
+          },
+        ));
   }
 
-  /// Build debug button
-  Widget _buildDebugButton() {
-    return FloatingActionButton(
-      onPressed: () {
-        final currentIndex = controller.currentIndex.value;
-        final currentVideo = controller.currentVideo;
-        final state = controller.currentVideoState.value;
-        
-        debugPrint('📊 Current Index: $currentIndex');
-        debugPrint('📹 Current Video: ${currentVideo?.id}');
-        debugPrint('🎭 Current State: $state');
-        
-        // Show info dialog
-        Get.dialog(
-          AlertDialog(
-            title: const Text('Video Info'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Index: $currentIndex'),
-                Text('Video ID: ${currentVideo?.id}'),
-                Text('State: $state'),
-                Text('URL: ${currentVideo?.url}'),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Get.back(),
-                child: const Text('Close'),
-              ),
-            ],
-          ),
-        );
-      },
-      backgroundColor: Colors.red.withValues(alpha: 0.8),
-      child: const Icon(Icons.info, color: Colors.white),
-    );
-  }
 }
 
 /// Individual video item widget
@@ -365,7 +359,7 @@ class _VideoItemState extends State<VideoItem>
           aspectRatio: VideoConstants.aspectRatio,
           fit: BoxFit.cover,
           autoPlay: false,
-          looping: false,
+          looping: _videoController.isLoopEnabled,
           controlsConfiguration: const BetterPlayerControlsConfiguration(
             showControls: false,
             enableProgressBar: false,
@@ -390,7 +384,8 @@ class _VideoItemState extends State<VideoItem>
       );
 
       _setupDataSource();
-      _videoController.registerVideoController(widget.index, _betterPlayerController);
+      _videoController.registerVideoController(
+          widget.index, _betterPlayerController);
       _isInitialized = true;
     } catch (e) {
       debugPrint('❌ Error initializing video ${widget.index}: $e');
@@ -408,14 +403,16 @@ class _VideoItemState extends State<VideoItem>
         bufferingConfiguration: BetterPlayerBufferingConfiguration(
           minBufferMs: VideoConstants.bufferMinMs.inMilliseconds,
           maxBufferMs: VideoConstants.bufferMaxMs.inMilliseconds,
-          bufferForPlaybackMs: VideoConstants.bufferForPlaybackMs.inMilliseconds,
-          bufferForPlaybackAfterRebufferMs: VideoConstants.bufferForPlaybackAfterRebufferMs.inMilliseconds,
+          bufferForPlaybackMs:
+              VideoConstants.bufferForPlaybackMs.inMilliseconds,
+          bufferForPlaybackAfterRebufferMs:
+              VideoConstants.bufferForPlaybackAfterRebufferMs.inMilliseconds,
         ),
         cacheConfiguration: const BetterPlayerCacheConfiguration(
           useCache: true,
-          preCacheSize: 10 * 1024 * 1024, // 10MB
-          maxCacheSize: 100 * 1024 * 1024, // 100MB
-          maxCacheFileSize: 50 * 1024 * 1024, // 50MB
+          preCacheSize: VideoConstants.preCacheSize,
+          maxCacheSize: VideoConstants.maxCacheSize,
+          maxCacheFileSize: VideoConstants.maxCacheFileSize,
         ),
       ),
     );
@@ -467,7 +464,7 @@ class _VideoItemState extends State<VideoItem>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    
+
     return VisibilityDetector(
       key: Key('video-${widget.index}'),
       onVisibilityChanged: (VisibilityInfo visibilityInfo) {
@@ -496,10 +493,8 @@ class _VideoItemState extends State<VideoItem>
     return Stack(
       alignment: Alignment.center,
       children: [
-        if (_isInitialized)
-          BetterPlayer(controller: _betterPlayerController),
-        if (_isBuffering)
-          _buildLoadingWidget(),
+        if (_isInitialized) BetterPlayer(controller: _betterPlayerController),
+        if (_isBuffering) _buildLoadingWidget(),
       ],
     );
   }

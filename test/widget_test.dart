@@ -64,4 +64,27 @@ void main() {
     mockController.dispose();
     controller.dispose();
   });
+
+  testWidgets('VideoController loop toggle test', (WidgetTester tester) async {
+    // Initialize GetX
+    Get.testMode = true;
+    
+    // Create VideoController
+    final controller = VideoController();
+    controller.onInit();
+    
+    // Test initial loop state
+    expect(controller.isLoopEnabled, VideoConstants.enableLooping);
+    
+    // Test toggle loop
+    controller.toggleLoop();
+    expect(controller.isLoopEnabled, !VideoConstants.enableLooping);
+    
+    // Test toggle back
+    controller.toggleLoop();
+    expect(controller.isLoopEnabled, VideoConstants.enableLooping);
+    
+    // Clean up
+    controller.dispose();
+  });
 }
