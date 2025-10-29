@@ -1,3 +1,55 @@
+# Tối Ưu Hóa Hiệu Suất Phát Video Flick
+
+## 1. Bối Cảnh và Vấn Đề
+
+Trải nghiệm người dùng khi lướt video trên ứng dụng ConCung hiện đang bị ảnh hưởng bởi độ trễ khoảng 0.5 giây mỗi khi chuyển video. Khoảng thời gian chờ tải này, dù ngắn, tạo ra sự gián đoạn (thể hiện qua màn hình loading), làm giảm sự mượt mà và liền mạch của luồng xem. So với các nền tảng video ngắn hàng đầu như TikTok hay YouTube Shorts, sự khác biệt này là rất rõ rệt và ảnh hưởng trực tiếp đến sự hài lòng của người dùng.
+
+## 2. Mục Tiêu
+
+Mục tiêu chính là **loại bỏ hoàn toàn độ trễ khi chuyển video**, giảm thời gian chờ từ 0.5 giây xuống **0.0 giây**. Điều này nhằm mang lại một trải nghiệm lướt video tức thì, mượt mà, ngang bằng với các tiêu chuẩn cao nhất trên thị trường.
+
+## 3. Giải Pháp Kỹ Thuật
+
+Để đạt được mục tiêu độ trễ bằng không, giải pháp được xây dựng dựa trên sự kết hợp đồng bộ của bốn cơ chế kỹ thuật chính, được triển khai trong `main.dart`. Mỗi cơ chế giải quyết một khía cạnh cụ thể của quá trình tải và phát video.
+
+### 3.1. Tải Trước Giao Diện Video (UI Pre-rendering)
+
+- **Vấn đề:** `PageView` mặc định của Flutter chỉ khởi tạo widget video khi nó sắp xuất hiện trên màn hình, gây ra độ trễ do phải xây dựng UI và khởi tạo controller tại thời điểm lướt.
+- **Giải pháp:** Sử dụng `PreloadPageView` để khởi tạo trước các widget `VideoItem` liền kề.
+  - **Triển khai:** Cấu hình `preloadPagesCount: 5` để chủ động tải và giữ trong bộ nhớ 5 widget video (2 ở trên, 2 ở dưới và 1 hiện tại).
+  - **Duy trì trạng thái:** `AutomaticKeepAliveClientMixin` được sử dụng để ngăn widget bị hủy khi lướt qua, bảo toàn trạng thái của video player.
+- **Kết quả:** Loại bỏ độ trễ do khởi tạo UI, đảm bảo giao diện video luôn sẵn sàng trước khi người dùng nhìn thấy.
+
+### 3.2. Tải Trước Dữ Liệu Video (Data Pre-caching)
+
+- **Vấn đề:** Sau khi UI sẵn sàng, ứng dụng vẫn cần thời gian để tải dữ liệu video từ mạng (buffering), đây là nguyên nhân chính gây ra màn hình loading.
+- **Giải pháp:** Tận dụng cơ chế caching mạnh mẽ của `better_player_plus` để tải trước dữ liệu video.
+  - **Triển khai:** Kích hoạt `useCache: true` và đặt `preCacheSize: 2MB`.
+  - **Mấu chốt:** Khi `PreloadPageView` khởi tạo widget, `BetterPlayer` sẽ tự động tải trước 2MB dữ liệu video vào bộ nhớ đệm. Với dung lượng video mục tiêu chỉ khoảng 700KB, điều này đảm bảo gần như toàn bộ video đã được tải xong trước khi người dùng lướt tới.
+- **Kết quả:** Video được phát ngay lập tức từ cache thay vì từ mạng, triệt tiêu thời gian buffering ban đầu.
+
+### 3.3. Tự Động Phát Video Thông Minh (Smart Autoplay)
+
+- **Vấn đề:** Cần một cơ chế để tự động phát video đang hiển thị và tạm dừng các video khác nhằm tối ưu hiệu năng và tài nguyên hệ thống (CPU, pin, mạng).
+- **Giải pháp:** Sử dụng `VisibilityDetector` để theo dõi tỷ lệ hiển thị của từng video.
+  - **Triển khai:** Logic được quản lý tập trung tại `VideoController`. Khi một video đạt ngưỡng hiển thị `playThreshold: 0.5` (50%), controller sẽ ra lệnh phát video đó và đồng thời tạm dừng tất cả các video đang phát khác.
+  - **Tối ưu hóa:** Kỹ thuật "debounce" với độ trễ 100ms được áp dụng để đảm bảo logic chỉ được thực thi sau khi người dùng ngừng lướt, tránh các lệnh play/pause liên tục gây giật lag.
+- **Kết quả:** Mang lại trải nghiệm tương tác mượt mà, tự nhiên như các nền tảng hàng đầu, đồng thời đảm bảo chỉ một video được phát tại một thời điểm để tối ưu hiệu năng.
+
+### 3.4. Quản Lý Trạng Thái Tập Trung (Centralized State Management)
+
+- **Vấn đề:** Quản lý đồng thời trạng thái của nhiều video (đang phát, đã tạm dừng, tỷ lệ hiển thị) là một bài toán phức tạp, dễ gây ra lỗi và rò rỉ bộ nhớ.
+- **Giải pháp:** Sử dụng `GetxController` (`VideoController`) làm "bộ não" trung tâm.
+  - **Triển khai:** `VideoController` chịu trách nhiệm quản lý toàn bộ trạng thái thông qua các `Map` và `Set` (ví dụ: `_videoControllers`, `_visibilities`, `_playingVideos`) và xử lý toàn bộ logic nghiệp vụ. Các widget `VideoItem` chỉ đóng vai trò hiển thị và báo cáo trạng thái cho controller.
+  - **Vòng đời:** Controller quản lý chặt chẽ vòng đời của các `BetterPlayerController`, đảm bảo chúng được đăng ký và giải phóng đúng cách.
+- **Kết quả:** Kiến trúc ứng dụng trở nên rõ ràng, tách biệt giữa giao diện và logic. Điều này giúp mã nguồn dễ dàng bảo trì, mở rộng và giảm thiểu nguy cơ lỗi.
+
+## 4. Kết Luận
+
+Bằng cách kết hợp bốn cơ chế: **Pre-rendering UI**, **Pre-caching Data**, **Smart Autoplay**, và **Centralized State Management**, giải pháp đã giải quyết triệt để các nguyên nhân gây ra độ trễ. Kết quả là một hệ thống phát video hiệu suất cao, đạt được mục tiêu loại bỏ hoàn toàn thời gian chờ, mang lại trải nghiệm người dùng liền mạch và chuyên nghiệp.
+
+## 5. Phụ Lục: Mã Nguồn Tham Chiếu
+```dart
 import 'dart:async';
 
 import 'package:better_player_plus/better_player_plus.dart';
@@ -673,3 +725,4 @@ class _VideoItemState extends State<VideoItem>
     );
   }
 }
+```

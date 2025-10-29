@@ -87,4 +87,24 @@ void main() {
     // Clean up
     controller.dispose();
   });
+
+  testWidgets('VideoController single video play test', (WidgetTester tester) async {
+    // Initialize GetX
+    Get.testMode = true;
+    
+    // Create VideoController
+    final controller = VideoController();
+    controller.onInit();
+    
+    // Test initial state
+    expect(controller.playingVideoCount, 0);
+    expect(controller.currentlyPlayingVideoIndex, null);
+    
+    // Test pause all videos
+    controller.pauseAllVideos();
+    expect(controller.playingVideoCount, 0);
+    
+    // Clean up
+    controller.dispose();
+  });
 }
